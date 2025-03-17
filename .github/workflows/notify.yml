@@ -1,0 +1,18 @@
+name: Notificações do Telegram
+
+on:
+  schedule:
+    # Essa expressão cron executa o workflow 3 vezes ao dia em UTC.
+    # Ajuste os horários conforme necessário (lembrando que o GitHub Actions usa UTC).
+    - cron: '0 10,15,22 * * *'
+  workflow_dispatch: # Permite disparar manualmente também
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fazer requisição para o endpoint do Vercel
+        run: |
+          echo "Disparando endpoint de notificações..."
+          curl -X POST https://my-calendar-telegram.vercel.app/api/telegram

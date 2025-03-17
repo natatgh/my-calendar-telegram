@@ -1,14 +1,56 @@
+// app/api/telegram/route.js
 import { format } from 'date-fns';
 
 /**
- * Retorna a URL para buscar os eventos do Google Calendar com os filtros de data.
+ * Retorna o período de notificação baseado no horário atual.
+ * Define:
+ * - Período da manhã: 07:00 às 12:00
+ * - Período da tarde: 12:00 às 19:00
+ * - Período da noite: 19:00 às 07:00 do dia seguinte
  */
-function getCalendarUrl(apiKey, calendarId, timeMin, timeMax) {
-  return `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?key=${apiKey}&timeMin=${timeMin}&timeMax=${timeMax}&orderBy=startTime&singleEvents=true`;
+function getNotificationPeriod() {
+  const now = new Date();
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  
+  let timeMin, timeMax, greeting;
+  const currentHour = now.getHours();
+  
+  if (currentHour >= 7 && currentHour < 12) {
+    // Período da manhã
+    timeMin = new Date(today);
+    timeMin.setHours(7);
+    timeMax = new Date(today);
+    timeMax.setHours(12);
+    greeting = "Bom dia!";
+  } else if (currentHour >= 12 && currentHour < 19) {
+    // Período da tarde
+    timeMin = new Date(today);
+    timeMin.setHours(12);
+    timeMax = new Date(today);
+    timeMax.setHours(19);
+    greeting = "Boa tarde!";
+  } else {
+    // Período da noite
+    timeMin = new Date(today);
+    timeMin.setHours(19);
+    timeMax = new Date(today);
+    timeMax.setDate(timeMax.getDate() + 1);
+    timeMax.setHours(7);
+    greeting = "Boa noite!";
+  }
+  return { timeMin, timeMax, greeting };
 }
 
 /**
- * Busca os eventos do Calendar usando os parâmetros de data.
+ * Monta a URL para buscar eventos do Calendar usando os parâmetros de data.
+ */
+function getCalendarUrl(apiKey, calendarId, timeMin, timeMax) {
+  return `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?key=${apiKey}&timeMin=${timeMin.toISOString()}&timeMax=${timeMax.toISOString()}&orderBy=startTime&singleEvents=true`;
+}
+
+/**
+ * Busca os eventos do Google Calendar no intervalo definido.
  */
 async function fetchCalendarEvents(apiKey, calendarId, timeMin, timeMax) {
   const url = getCalendarUrl(apiKey, calendarId, timeMin, timeMax);
@@ -23,42 +65,27 @@ async function fetchCalendarEvents(apiKey, calendarId, timeMin, timeMax) {
 }
 
 /**
- * Separa os eventos do dia em passados e futuros.
- */
-function separateEvents(events) {
-  const now = new Date();
-  const pastEvents = events.filter(event => {
-    const start = event.start.dateTime || event.start.date;
-    return new Date(start) < now;
-  });
-  const upcomingEvents = events.filter(event => {
-    const start = event.start.dateTime || event.start.date;
-    return new Date(start) >= now;
-  });
-  pastEvents.sort((a, b) => new Date(a.start.dateTime || a.start.date) - new Date(b.start.dateTime || b.start.date));
-  upcomingEvents.sort((a, b) => new Date(a.start.dateTime || a.start.date) - new Date(b.start.dateTime || b.start.date));
-  return { pastEvents, upcomingEvents };
-}
-
-/**
- * Gera a mensagem formatada para um evento, incluindo link do Waze se houver localização.
+ * Gera a mensagem para um evento, incluindo link do Waze se houver localização.
  */
 function generateMessage(event, statusEmoji) {
   const start = event.start.dateTime || event.start.date;
   const eventDate = new Date(start);
-  const formattedTime = format(eventDate, 'HH:mm'); // Formata para "HH:mm"
-  let message = `*Evento:* ${event.summary}\n*Horário:* ${formattedTime} ${statusEmoji}`;
-  
+  const formattedTime = format(eventDate, 'HH:mm');
+
+  // Exibe o nome do evento em negrito, sem o prefixo "Evento:"
+  let message = `**${event.summary}**\n`;
+  message += `*Horário:* ${formattedTime} ${statusEmoji}\n`;
+
   if (event.location) {
     const wazeLink = `https://waze.com/ul?q=${encodeURIComponent(event.location)}&navigate=yes`;
-    message += `\n*Local:* [${event.location}](${wazeLink})`;
+    message += `*Local:* [${event.location}](${wazeLink})\n`;
   }
-  
+
   return message;
 }
 
 /**
- * Envia uma mensagem via Telegram utilizando a Bot API.
+ * Envia mensagem via Telegram.
  */
 async function sendTelegramMessage(botToken, chatId, message) {
   const telegramUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
@@ -84,46 +111,36 @@ export async function POST(request) {
     const calendarId = process.env.CALENDAR_ID;
     const botToken = process.env.TELEGRAM_BOT_TOKEN;
     const chatId = process.env.TELEGRAM_CHAT_ID;
-
     if (!apiKey || !calendarId || !botToken || !chatId) {
       throw new Error("Variáveis de ambiente não definidas corretamente.");
     }
 
-    // Define o intervalo do dia atual
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const timeMin = today.toISOString();
-    const timeMax = tomorrow.toISOString();
+    // Define o período de notificação
+    const { timeMin, timeMax, greeting } = getNotificationPeriod();
+    console.log(`Período: ${timeMin.toISOString()} até ${timeMax.toISOString()}`);
 
-    // Busca os eventos do Google Calendar
+    // Busca os eventos no intervalo
     const events = await fetchCalendarEvents(apiKey, calendarId, timeMin, timeMax);
     
-    // Se não houver eventos, envia uma mensagem única
+    // Se houver eventos, notifica cada um; caso contrário, envia uma mensagem padrão
     if (!events || events.length === 0) {
-      await sendTelegramMessage(botToken, chatId, 'Nenhum evento encontrado para hoje.');
-      return new Response(JSON.stringify({ message: 'Nenhum evento encontrado para hoje.' }), { status: 200 });
+      await sendTelegramMessage(botToken, chatId, greeting + " Nenhum evento agendado para este período.");
+    } else {
+      // Para cada evento, definir status visual:
+      // Se o evento já ocorreu, use 🟢; se ainda vai ocorrer, use 🔴.
+      const now = new Date();
+      for (const event of events) {
+        const start = event.start.dateTime || event.start.date;
+        const eventDate = new Date(start);
+        const statusEmoji = eventDate < now ? "🟢" : "🔴";
+        const message = generateMessage(event, statusEmoji);
+        await sendTelegramMessage(botToken, chatId, message);
+      }
     }
 
-    // Separa os eventos em passados e futuros
-    const { pastEvents, upcomingEvents } = separateEvents(events);
-
-    // Envia notificações para os eventos passados (usando 🟢 para indicar que já ocorreram)
-    for (const event of pastEvents) {
-      const message = generateMessage(event, '🟢');
-      await sendTelegramMessage(botToken, chatId, message);
-    }
-
-    // Envia notificações para os eventos futuros (usando 🔴 para indicar que estão por vir)
-    for (const event of upcomingEvents) {
-      const message = generateMessage(event, '🔴');
-      await sendTelegramMessage(botToken, chatId, message);
-    }
-
-    return new Response(JSON.stringify({ message: 'Mensagens enviadas com sucesso.' }), { status: 200 });
+    return new Response(JSON.stringify({ message: 'Notificações enviadas com sucesso.' }), { status: 200 });
   } catch (error) {
-    console.error('Erro ao enviar mensagem:', error);
-    return new Response(JSON.stringify({ message: 'Erro ao enviar mensagem', error: error.message }), { status: 500 });
+    console.error('Erro ao enviar notificações:', error);
+    return new Response(JSON.stringify({ message: 'Erro ao enviar notificações', error: error.message }), { status: 500 });
   }
 }

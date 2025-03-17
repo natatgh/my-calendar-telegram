@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/telegram/route.js": {
+      "schedule": "0 7,12,19 * * *"
+    }
+  }
+}

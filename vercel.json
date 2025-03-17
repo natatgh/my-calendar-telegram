@@ -1,7 +1,8 @@
 {
-  "functions": {
-    "api/telegram/route.js": {
+  "crons": [
+    {
+      "path": "/api/telegram",
       "schedule": "0 7,12,19 * * *"
     }
-  }
+  ]
 }

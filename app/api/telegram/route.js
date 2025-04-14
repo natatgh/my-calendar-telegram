@@ -1,47 +1,47 @@
-import { format } from 'date-fns';
+import { utcToZonedTime, zonedTimeToUtc } from 'date-fns-tz';
+import { format, startOfDay, set } from 'date-fns';
+
+const timeZone = 'America/Sao_Paulo';
 
 /**
- * Retorna o período de notificação baseado no horário atual.
+ * Retorna o período de notificação baseado no horário atual com base no fuso de São Paulo.
  * Define:
  * - Período da manhã: 07:00 às 12:00
  * - Período da tarde: 12:00 às 19:00
  * - Período da noite: 19:00 às 07:00 do dia seguinte
  */
 function getNotificationPeriod() {
-  const now = new Date();
-  const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
+  // Converte a data atual para o fuso horário de São Paulo
+  const now = utcToZonedTime(new Date(), timeZone);
+  // Obtém o início do dia no fuso de São Paulo
+  const today = startOfDay(now);
 
   let timeMin, timeMax, greeting, periodDescription;
   const currentHour = now.getHours();
 
   if (currentHour >= 7 && currentHour < 12) {
-    // Período da manhã
-    timeMin = new Date(today);
-    timeMin.setHours(7);
-    timeMax = new Date(today);
-    timeMax.setHours(12);
+    timeMin = set(today, { hours: 7 });
+    timeMax = set(today, { hours: 12 });
     greeting = "Bom dia!";
     periodDescription = "manhã (07:00 - 12:00)";
   } else if (currentHour >= 12 && currentHour < 19) {
-    // Período da tarde
-    timeMin = new Date(today);
-    timeMin.setHours(12);
-    timeMax = new Date(today);
-    timeMax.setHours(19);
+    timeMin = set(today, { hours: 12 });
+    timeMax = set(today, { hours: 19 });
     greeting = "Boa tarde!";
     periodDescription = "tarde (12:00 - 19:00)";
   } else {
-    // Período da noite
-    timeMin = new Date(today);
-    timeMin.setHours(19);
-    timeMax = new Date(today);
-    timeMax.setDate(timeMax.getDate() + 1);
-    timeMax.setHours(7);
+    timeMin = set(today, { hours: 19 });
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    timeMax = set(tomorrow, { hours: 7 });
     greeting = "Boa noite!";
     periodDescription = "noite (19:00 - 07:00)";
   }
-  return { timeMin, timeMax, greeting, periodDescription };
+  // Converte os horários calculados (em São Paulo) para UTC para uso na API do Google Calendar
+  const timeMinUtc = zonedTimeToUtc(timeMin, timeZone);
+  const timeMaxUtc = zonedTimeToUtc(timeMax, timeZone);
+
+  return { timeMin: timeMinUtc, timeMax: timeMaxUtc, greeting, periodDescription };
 }
 
 /**
@@ -122,11 +122,9 @@ export async function POST(request) {
       throw new Error("Variáveis de ambiente não definidas corretamente.");
     }
 
-    // Define o período de notificação e prepara uma descrição amigável
+    // Define o período de notificação com base no fuso de São Paulo
     const { timeMin, timeMax, greeting, periodDescription } = getNotificationPeriod();
-    console.log(
-      `Período: ${timeMin.toISOString()} até ${timeMax.toISOString()} - ${periodDescription}`
-    );
+    console.log(`Período: ${timeMin.toISOString()} até ${timeMax.toISOString()} - ${periodDescription}`);
 
     // Busca os eventos no intervalo
     const events = await fetchCalendarEvents(apiKey, calendarId, timeMin, timeMax);
@@ -134,13 +132,12 @@ export async function POST(request) {
     let details = [];
 
     if (!events || events.length === 0) {
-      // Mensagem padrão se não houver eventos
       const message = `${greeting} Nenhum evento agendado para o período ${periodDescription}.`;
       await sendTelegramMessage(botToken, chatId, message);
       notificationsSent++;
       details.push({ message });
     } else {
-      // Envia uma mensagem de cabeçalho informando o período e listando os eventos
+      // Envia mensagem de cabeçalho informando o período e listando os eventos
       const headerMessage = `${greeting} Detectamos que o período atual é de ${periodDescription}. Estes são seus eventos agendados para esse período:`;
       await sendTelegramMessage(botToken, chatId, headerMessage);
       notificationsSent++;
@@ -159,7 +156,6 @@ export async function POST(request) {
       }
     }
 
-    // Responde com um JSON detalhado para depuração e confirmação
     const responseData = {
       message: 'Notificações enviadas com sucesso.',
       period: {
@@ -176,9 +172,6 @@ export async function POST(request) {
     return new Response(JSON.stringify(responseData), { status: 200 });
   } catch (error) {
     console.error('Erro ao enviar notificações:', error);
-    return new Response(
-      JSON.stringify({ message: 'Erro ao enviar notificações', error: error.message }),
-      { status: 500 }
-    );
+    return new Response(JSON.stringify({ message: 'Erro ao enviar notificações', error: error.message }), { status: 500 });
   }
 }
